@@ -91,6 +91,9 @@
  * timeoutInterval
  * - The maximum time in milliseconds to wait for a connection to succeed before closing and retrying. Accepts integer. Default: 2000.
  *
+ * webSocket
+ * - A subclass of WebSocket to use instead of the original
+ *
  */
 (function (global, factory) {
     if (typeof define === 'function' && define.amd) {
@@ -131,7 +134,9 @@
             maxReconnectAttempts: null,
 
             /** The binary type, possible values 'blob' or 'arraybuffer', default 'blob'. */
-            binaryType: 'blob'
+            binaryType: 'blob',
+
+            webSocket: WebSocket
         }
         if (!options) { options = {}; }
 
@@ -206,7 +211,7 @@
         };
 
         this.open = function (reconnectAttempt) {
-            ws = new WebSocket(self.url, protocols || []);
+            ws = new self.webSocket(self.url, protocols || []);
             ws.binaryType = this.binaryType;
 
             if (reconnectAttempt) {
