@@ -20,6 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+const WebSocket = require("ws");
+const EventEmitter = require('node:events');
+class ReconnectingWebSocketEmitter extends EventEmitter {}
+
 /**
  * This behaves like a WebSocket in every way, except if it fails to connect,
  * or it gets disconnected, it will repeatedly poll until it successfully connects
@@ -91,8 +95,8 @@
  * timeoutInterval
  * - The maximum time in milliseconds to wait for a connection to succeed before closing and retrying. Accepts integer. Default: 2000.
  *
- * webSocket
- * - A subclass of WebSocket to use instead of the original
+ * webSocketOptions
+ * - An object with WebSocket options
  *
  */
 (function (global, factory) {
@@ -105,12 +109,7 @@
     }
 })(this, function () {
 
-    if (!('WebSocket' in window)) {
-        return;
-    }
-
     function ReconnectingWebSocket(url, protocols, options) {
-
         // Default settings
         var settings = {
 
@@ -136,7 +135,7 @@
             /** The binary type, possible values 'blob' or 'arraybuffer', default 'blob'. */
             binaryType: 'blob',
 
-            webSocket: WebSocket
+            webSocketOptions: {}
         }
         if (!options) { options = {}; }
 
@@ -148,7 +147,6 @@
                 this[key] = settings[key];
             }
         }
-
         // These should be treated as read-only properties
 
         /** The URL as resolved by the constructor. This is always an absolute URL. Read only. */
@@ -177,41 +175,24 @@
         var ws;
         var forcedClose = false;
         var timedOut = false;
-        var eventTarget = document.createElement('div');
+        var eventTarget = new ReconnectingWebSocketEmitter();
 
         // Wire up "on*" properties as event handlers
 
-        eventTarget.addEventListener('open',       function(event) { self.onopen(event); });
-        eventTarget.addEventListener('close',      function(event) { self.onclose(event); });
-        eventTarget.addEventListener('connecting', function(event) { self.onconnecting(event); });
-        eventTarget.addEventListener('message',    function(event) { self.onmessage(event); });
-        eventTarget.addEventListener('error',      function(event) { self.onerror(event); });
+        eventTarget.on('open',       function(event) { self.onopen(event); });
+        eventTarget.on('close',      function(event) { self.onclose(event); });
+        eventTarget.on('connecting', function(event) { self.onconnecting(event); });
+        eventTarget.on('message',    function(event) { self.onmessage(event); });
+        eventTarget.on('error',      function(event) { self.onerror(event); });
 
         // Expose the API required by EventTarget
 
-        this.addEventListener = eventTarget.addEventListener.bind(eventTarget);
-        this.removeEventListener = eventTarget.removeEventListener.bind(eventTarget);
-        this.dispatchEvent = eventTarget.dispatchEvent.bind(eventTarget);
-
-        /**
-         * This function generates an event that is compatible with standard
-         * compliant browsers and IE9 - IE11
-         *
-         * This will prevent the error:
-         * Object doesn't support this action
-         *
-         * http://stackoverflow.com/questions/19345392/why-arent-my-parameters-getting-passed-through-to-a-dispatched-event/19345563#19345563
-         * @param s String The name that the event should use
-         * @param args Object an optional object that the event will use
-         */
-        function generateEvent(s, args) {
-        	var evt = document.createEvent("CustomEvent");
-        	evt.initCustomEvent(s, false, false, args);
-        	return evt;
-        };
+        this.addEventListener = eventTarget.addListener.bind(eventTarget);
+        this.removeEventListener = eventTarget.removeListener.bind(eventTarget);
+        this.dispatchEvent = eventTarget.emit.bind(eventTarget);
 
         this.open = function (reconnectAttempt) {
-            ws = new self.webSocket(self.url, protocols || []);
+            ws = new WebSocket(self.url, protocols || [], self.webSocketOptions);
             ws.binaryType = this.binaryType;
 
             if (reconnectAttempt) {
@@ -219,7 +200,7 @@
                     return;
                 }
             } else {
-                eventTarget.dispatchEvent(generateEvent('connecting'));
+                eventTarget.emit('connecting');
                 this.reconnectAttempts = 0;
             }
 
@@ -245,10 +226,9 @@
                 self.protocol = ws.protocol;
                 self.readyState = WebSocket.OPEN;
                 self.reconnectAttempts = 0;
-                var e = generateEvent('open');
-                e.isReconnect = reconnectAttempt;
+                var isReconnect = reconnectAttempt;
                 reconnectAttempt = false;
-                eventTarget.dispatchEvent(e);
+                eventTarget.emit('open', {isReconnect: isReconnect});
             };
 
             ws.onclose = function(event) {
@@ -256,19 +236,19 @@
                 ws = null;
                 if (forcedClose) {
                     self.readyState = WebSocket.CLOSED;
-                    eventTarget.dispatchEvent(generateEvent('close'));
+                    eventTarget.emit('close');
                 } else {
                     self.readyState = WebSocket.CONNECTING;
-                    var e = generateEvent('connecting');
-                    e.code = event.code;
-                    e.reason = event.reason;
-                    e.wasClean = event.wasClean;
-                    eventTarget.dispatchEvent(e);
+                    eventTarget.emit('connecting', {
+                        code: event.code,
+                        reason: event.reason,
+                        wasClean: event.wasClean,
+                    });
                     if (!reconnectAttempt && !timedOut) {
                         if (self.debug || ReconnectingWebSocket.debugAll) {
                             console.debug('ReconnectingWebSocket', 'onclose', self.url);
                         }
-                        eventTarget.dispatchEvent(generateEvent('close'));
+                        eventTarget.emit('close');
                     }
 
                     var timeout = self.reconnectInterval * Math.pow(self.reconnectDecay, self.reconnectAttempts);
@@ -282,15 +262,15 @@
                 if (self.debug || ReconnectingWebSocket.debugAll) {
                     console.debug('ReconnectingWebSocket', 'onmessage', self.url, event.data);
                 }
-                var e = generateEvent('message');
-                e.data = event.data;
-                eventTarget.dispatchEvent(e);
+                eventTarget.emit('message', {
+                    data: event.data,
+                });
             };
             ws.onerror = function(event) {
                 if (self.debug || ReconnectingWebSocket.debugAll) {
                     console.debug('ReconnectingWebSocket', 'onerror', self.url, event);
                 }
-                eventTarget.dispatchEvent(generateEvent('error'));
+                eventTarget.emit('error');
             };
         }
 
